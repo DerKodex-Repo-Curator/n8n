@@ -8,6 +8,7 @@ import { AI_PREFERENCES_CLEARED_BLOCK, renderAiPreferencesBlock } from '@n8n/bac
 import type { Mock } from 'vitest';
 
 import {
+	APPROVAL_MODE_OPEN_TAG,
 	buildAppTargetsBlock,
 	buildThreadArtifactsBlock,
 	buildThreadContextBlock,
@@ -769,5 +770,57 @@ describe('AssistantTurnInputBuilder — opening-turn title', () => {
 		});
 
 		expect(patch).toEqual({ title: '', metadata: { [OPENED_METADATA_KEY]: true } });
+	});
+});
+
+describe('AssistantTurnInputBuilder — approval mode', () => {
+	async function buildUserTurn(context: Record<string, unknown>) {
+		const builder = Object.assign(Object.create(AssistantTurnInputBuilder.prototype) as object, {
+			defaultTimeZone: 'UTC',
+			webhookBaseUrl: 'https://acme.example.com/webhook',
+			formBaseUrl: 'https://acme.example.com/form',
+			logger: { warn: vi.fn(), debug: vi.fn() },
+			buildWorkflowSetupStateBlock: vi.fn(async () => ''),
+			instanceContext: {
+				buildBlock: vi.fn(async () => ({ state: 'absent', reason: 'disabled' })),
+			},
+			resolveBoundProject: vi.fn(async () => undefined),
+		}) as unknown as AssistantTurnInputBuilder;
+		const environment = {
+			context,
+			memory: {
+				getThread: vi.fn(async () => ({
+					id: 'thread-1',
+					resourceId: 'user-1',
+					title: 'Test rows',
+					metadata: { [OPENED_METADATA_KEY]: true },
+				})),
+				getMessages: vi.fn(async () => []),
+			},
+			taskStorage: { get: vi.fn(async () => undefined) },
+			instanceContextEnabled: false,
+			skillScope: {},
+		} as unknown as AssistantTurnEnvironment;
+		const { fullMessage } = await builder.buildInput(
+			environment,
+			{ eventBus: { publish: vi.fn() } } as never,
+			{
+				user: { id: 'user-1' } as never,
+				threadId: 'thread-1',
+				runId: 'run-1',
+				message: 'Delete the test rows',
+				fileAttachments: [],
+				contextAttachments: [],
+			},
+		);
+		return fullMessage;
+	}
+
+	it('tells the agent in Auto mode that an approval may run without a card', async () => {
+		expect(await buildUserTurn({ approvalReviewer: {} })).toContain(APPROVAL_MODE_OPEN_TAG);
+	});
+
+	it('adds nothing about approvals in Manual mode', async () => {
+		expect(await buildUserTurn({})).not.toContain(APPROVAL_MODE_OPEN_TAG);
 	});
 });
