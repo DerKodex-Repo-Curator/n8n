@@ -3,7 +3,7 @@ import type { ModuleRegistry } from '@n8n/backend-common';
 import {
 	type EventService,
 	type ExecutionRedactionServiceProxy,
-	WorkflowVersionedSettings,
+	WorkflowVersionedSettingsService,
 } from '@n8n/backend-services';
 import { mockInstance } from '@n8n/backend-test-utils';
 import { GlobalConfig } from '@n8n/config';
@@ -92,7 +92,7 @@ describe('ExecutionService', () => {
 		ownershipService,
 		engineV2ExecutionReader,
 		engineDataPlane,
-		new WorkflowVersionedSettings(moduleRegistry),
+		new WorkflowVersionedSettingsService(moduleRegistry),
 	);
 
 	beforeEach(() => {
@@ -273,7 +273,7 @@ describe('ExecutionService', () => {
 				ownershipService,
 				mock(),
 				mock(),
-				new WorkflowVersionedSettings(moduleRegistry),
+				new WorkflowVersionedSettingsService(moduleRegistry),
 			);
 
 			const mockUser = mock<User>({ id: 'user-1' });
@@ -357,7 +357,7 @@ describe('ExecutionService', () => {
 				ownershipService,
 				mock(),
 				mock(),
-				new WorkflowVersionedSettings(moduleRegistry),
+				new WorkflowVersionedSettingsService(moduleRegistry),
 			);
 
 			workflowRunner.run.mockResolvedValue('retried-123');

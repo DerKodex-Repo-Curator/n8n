@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { Logger } from '@n8n/backend-common';
-import { Publisher, WorkflowVersionedSettings } from '@n8n/backend-services';
+import { Publisher, WorkflowVersionedSettingsService } from '@n8n/backend-services';
 import { WorkflowsConfig } from '@n8n/config';
 import type { WorkflowEntity, IWorkflowDb } from '@n8n/db';
 import { WorkflowRepository } from '@n8n/db';
@@ -111,7 +111,7 @@ export class ActiveWorkflowManager {
 		private readonly workflowPushNotifier: WorkflowPushNotifier,
 		private readonly policyEnforcementService: PolicyEnforcementService,
 		private readonly ownershipService: OwnershipService,
-		private readonly workflowVersionedSettings: WorkflowVersionedSettings,
+		private readonly workflowVersionedSettings: WorkflowVersionedSettingsService,
 	) {
 		this.logger = this.logger.scoped(['workflow-activation']);
 	}
