@@ -69,6 +69,7 @@ export class AgentExporter {
 
 		const content = this.serializer.serialize(agent, definition, integrations);
 		return {
+			parentFolderId: agent.parentFolderId,
 			projectId: agent.projectId,
 			content,
 			metadata: this.serializer.serializeMetadata({

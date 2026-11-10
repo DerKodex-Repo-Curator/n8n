@@ -45,6 +45,7 @@ export interface AgentImportOutcome {
 export type AgentImportIssue = Extract<ImportBlockingIssue, { type: `agent-${string}` }>;
 
 export interface PreparedAgent extends Omit<SerializedAgent, 'id'> {
+	parentFolderId?: string | null;
 	sourceAgentId: string;
 	metadata: SerializedAgentMetadata;
 }

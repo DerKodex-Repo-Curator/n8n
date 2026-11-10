@@ -229,6 +229,7 @@ export class N8nPackagesService {
 		const allFoldersBeforeAutoInclude = [
 			...(folderExportResult?.entries ?? []),
 			...(projectExportResult?.folderEntries ?? []),
+			...(agentExportResult?.folderEntries ?? []),
 		];
 		const allProjectsBeforeAutoInclude = [
 			...(projectExportResult?.entries ?? []),
@@ -503,11 +504,16 @@ export class N8nPackagesService {
 						user: request.user,
 						writer,
 						agentIds: request.agentIds,
+						folderIds: folderExportResult?.entries.map(({ id }) => id),
 						projectIds,
 						projectWorkflowIds: request.projectWorkflowIds,
 						versionPolicy,
 						dependencyPolicy,
 						projectTargetsById: projectExportResult?.projectTargetsById,
+						existingFolderEntries: [
+							...(projectExportResult?.folderEntries ?? []),
+							...(folderExportResult?.entries ?? []),
+						],
 					});
 
 		return { folderExportResult, workflowExportResult, projectExportResult, agentExportResult };
@@ -597,7 +603,7 @@ export class N8nPackagesService {
 
 	private async readImportManifest(
 		reader: PackageReader,
-		{ allowAgents = false } = {},
+		{ allowAgents = true } = {},
 	): Promise<PackageManifest> {
 		const manifest = await this.packageParser.getManifest(reader);
 		if (manifest.agents?.length) {

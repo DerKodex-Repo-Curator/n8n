@@ -24,6 +24,8 @@ type AgentPackageKeyHandling = {
 	availableInMCP: 'copy';
 	project: 'exclude';
 	projectId: 'exclude';
+	parentFolderId: 'exclude';
+	parentFolder: 'exclude';
 	scope: 'exclude';
 	createdAt: 'exclude';
 	updatedAt: 'exclude';
