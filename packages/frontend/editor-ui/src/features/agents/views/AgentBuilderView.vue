@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { AGENT_SESSION_ASSISTANT_KEY, OPEN_AGENT_PREVIEW_KEY } from './AgentSessionsListView.vue';
 import { useAgentPromptInspiration } from '../composables/useAgentPromptInspiration';
 import { useAgentBuilderExperimentStore } from '@/experiments/agentBuilder/stores/agentBuilder.store';
 import {
@@ -150,6 +149,8 @@ import {
 import {
 	AGENT_CONFIG_WRITE_KEY,
 	AGENT_BUILDER_STANDALONE_KEY,
+	AGENT_SESSION_ASSISTANT_KEY,
+	OPEN_AGENT_PREVIEW_KEY,
 	type AgentConfigWrite,
 } from '../components/agentBuilderInjectionKeys';
 import AgentBuilderChatMode from '../components/AgentBuilderChatMode.vue';
