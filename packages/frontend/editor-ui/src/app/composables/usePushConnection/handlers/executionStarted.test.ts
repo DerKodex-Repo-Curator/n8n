@@ -20,10 +20,18 @@ describe('executionStarted', () => {
 	let options: PushHandlerOptions;
 	let workflowExecutionStateStore: ReturnType<typeof useWorkflowExecutionStateStore>;
 
-	function makeEvent(executionId = 'exec-1', workflowId = 'wf-123'): ExecutionStarted {
+	function makeEvent(
+		executionId = 'exec-1',
+		workflowId = 'wf-123',
+		runData?: IRunData,
+	): ExecutionStarted {
 		return {
 			type: 'executionStarted',
-			data: { executionId, workflowId } as ExecutionStarted['data'],
+			data: {
+				executionId,
+				workflowId,
+				...(runData && { flattedRunData: stringify(runData) }),
+			} as ExecutionStarted['data'],
 		};
 	}
 
@@ -34,37 +42,19 @@ describe('executionStarted', () => {
 
 		const workflowDocumentStore = useWorkflowDocumentStore(documentId);
 		workflowDocumentStore.setName('My Workflow');
-		useWorkflowsStore().setWorkflowId('wf-123');
 
 		workflowExecutionStateStore = useWorkflowExecutionStateStore(documentId);
 	});
 
 	describe('node execution issues', () => {
 		const AGENT = 'Agent';
-		const FAILED_TASK = createTestTaskData({
-			executionStatus: 'error',
-			error: { message: 'invalid x-api-key' } as ExecutionError,
-		});
 
 		function agentExecutionIssue(): boolean | undefined {
 			return useWorkflowDocumentStore(documentId).getNodeByName(AGENT)?.issues?.execution;
 		}
 
-		async function startWithRunData(runData: IRunData): Promise<void> {
-			await executionStarted(
-				{
-					type: 'executionStarted',
-					data: {
-						executionId: 'exec-1',
-						workflowId: 'wf-123',
-						flattedRunData: stringify(runData),
-					} as ExecutionStarted['data'],
-				},
-				options,
-			);
-		}
-
 		beforeEach(() => {
+			useWorkflowsStore().setWorkflowId('wf-123');
 			const workflowDocumentStore = useWorkflowDocumentStore(documentId);
 			workflowDocumentStore.addNode(createTestNode({ name: AGENT }));
 			workflowDocumentStore.setNodeIssue({ node: AGENT, type: 'execution', value: true });
@@ -72,13 +62,18 @@ describe('executionStarted', () => {
 		});
 
 		it('keeps a node execution issue when the started run data has a failed task for the node', async () => {
-			await startWithRunData({ [AGENT]: [FAILED_TASK] });
+			const failedTask = createTestTaskData({
+				executionStatus: 'error',
+				error: { message: 'invalid x-api-key' } as ExecutionError,
+			});
+
+			await executionStarted(makeEvent('exec-1', 'wf-123', { [AGENT]: [failedTask] }), options);
 
 			expect(agentExecutionIssue()).toBe(true);
 		});
 
 		it('clears a node execution issue when the started run data has no task for the node', async () => {
-			await startWithRunData({ 'Make Notes': [createTestTaskData()] });
+			await executionStarted(makeEvent('exec-1', 'wf-123', {}), options);
 
 			expect(agentExecutionIssue()).toBeUndefined();
 		});
