@@ -34,7 +34,9 @@ import AgentsListIntro from '../components/AgentsListIntro.vue';
 import type { BaseFilters, SortingAndPaginationUpdates } from '@/Interface';
 import { useSettingsStore } from '@n8n/stores/settings.store';
 import AgentFolderBrowser from '../components/AgentFolderBrowser.vue';
+import AgentFolderToolbar from '../components/AgentFolderToolbar.vue';
 import AgentFolderDialog, { type AgentFolderAction } from '../components/AgentFolderDialog.vue';
+import { N8nText } from '@n8n/design-system';
 
 function isAgentResource(value: unknown): value is AgentResource {
 	return typeof value === 'object' && value !== null && 'id' in value;
@@ -91,6 +93,9 @@ const totalAgents = ref(0);
 const loading = ref(true);
 
 const projectId = computed(() => route.params.projectId as string | undefined);
+const showFolders = computed(() =>
+	Boolean(projectId.value && settingsStore.isFoldersFeatureEnabled),
+);
 
 // Exposure covers both arms: control users see the default empty state, test users
 // the templates intro. The source mirrors the layout's empty-state condition, so a
@@ -340,6 +345,7 @@ onMounted(async () => {
 			:type-props="{ itemSize: 80 }"
 			:custom-page-size="DEFAULT_WORKFLOW_PAGE_SIZE"
 			:total-items="totalAgents"
+			:has-empty-state="!showFolders"
 			:dont-perform-sorting-and-filtering="true"
 			:shareable="false"
 			:ui-config="{ searchEnabled: true, showFiltersDropdown: false, sortEnabled: true }"
@@ -357,16 +363,49 @@ onMounted(async () => {
 						time-range="week"
 					/>
 				</ProjectHeader>
+			</template>
+
+			<template v-if="showFolders" #breadcrumbs>
+				<AgentFolderToolbar
+					:items="folderBrowser?.breadcrumbs ?? []"
+					:folder-id="folderId"
+					:can-create="folderBrowser?.folderPermissions.create ?? false"
+					:drag-active="folderBrowser?.isDragging ?? false"
+					@navigate="folderBrowser?.navigate($event)"
+					@drop="folderBrowser?.drop($event)"
+					@create="folderBrowser?.createFolder()"
+				/>
+			</template>
+
+			<template v-if="showFolders && projectId" #list-prepend>
 				<AgentFolderBrowser
-					v-if="projectId && settingsStore.isFoldersFeatureEnabled"
 					ref="folderBrowser"
 					:project-id="projectId"
 					:folder-id="folderId"
 					:search="filters.search"
 					:sort-by="currentSort"
+					hide-toolbar
 					@changed="foldersChanged"
 					@count="folderCount = $event"
 				/>
+				<template v-if="!loading && totalAgents === 0 && folderCount === 0">
+					<N8nText v-if="filters.search" color="text-base" size="medium">
+						{{ locale.baseText('agents.noResults') }}
+					</N8nText>
+					<AgentsListIntro
+						v-else-if="showTemplatesIntro"
+						:disabled="!canCreateAgent"
+						@create-blank="onCreateBlank"
+						@submit="onCreateFromPrompt"
+						@select="onCreateFromTemplate"
+					/>
+					<ResourcesListEmptyState
+						v-else
+						resource-key="agents"
+						:button-disabled="!canCreateAgent"
+						@click:button="onCreateAgentClick"
+					/>
+				</template>
 			</template>
 
 			<template #empty>
