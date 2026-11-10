@@ -13,7 +13,7 @@ import {
 	RestrictedNodeTypesProviderProxy,
 	WorkflowMutationHooksProxy,
 	WorkflowPublishGuardProxy,
-	WorkflowVersionedSettings,
+	WorkflowVersionedSettingsService,
 } from '@n8n/backend-services';
 import { GlobalConfig } from '@n8n/config';
 import type {
@@ -223,7 +223,7 @@ export class WorkflowService {
 		private readonly deprecatedNodesValidationService: DeprecatedNodesValidationService,
 		private readonly projectScopeService: ProjectScopeService,
 		private readonly workflowIndexService: WorkflowIndexService,
-		private readonly workflowVersionedSettings: WorkflowVersionedSettings,
+		private readonly WorkflowVersionedSettingsService: WorkflowVersionedSettingsService,
 	) {}
 
 	/**
@@ -692,7 +692,7 @@ export class WorkflowService {
 		const settingsChange = compareWorkflowSettings(
 			workflow.settings,
 			workflowUpdateData.settings,
-			this.workflowVersionedSettings.isEnabled(),
+			this.WorkflowVersionedSettingsService.isEnabled(),
 		);
 
 		// Save a new version when nodes, connections, nodeGroups, or a version-scoped setting change
@@ -951,7 +951,7 @@ export class WorkflowService {
 		workflowUpdateData: WorkflowEntity,
 		{ restoredFromVersionId, restoredVersionSettings }: WorkflowUpdateOptions,
 	) {
-		if (!this.workflowVersionedSettings.isEnabled()) return;
+		if (!this.WorkflowVersionedSettingsService.isEnabled()) return;
 
 		const storedSettings =
 			restoredVersionSettings ??
