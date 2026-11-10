@@ -267,6 +267,7 @@ const stopSessionAutoRefreshMock = vi.fn();
 vi.mock('../composables/useAgentApi', () => ({
 	getAgent: getAgentMock,
 	createAgent: createAgentMock,
+	moveAgent: vi.fn(),
 	createAgentTask: createAgentTaskMock,
 	updateAgent: updateAgentMock,
 	updateAgentSkill: updateAgentSkillMock,
@@ -1058,6 +1059,20 @@ describe('AgentBuilderView — preview routing', () => {
 		expect(fetchSessionThreadsMock).toHaveBeenCalledWith('p1', 'a1');
 	});
 
+	it('keeps folder placement on the first save of a pending Agent', async () => {
+		history.replaceState({ instanceAiPendingAgentId: 'a1' }, '');
+		routeQuery.folderId = 'support-folder';
+		const wrapper = await renderView();
+		const editor = wrapper.findComponent({ name: 'AgentBuilderEditorColumn' });
+		editor.vm.$emit('update:config', { instructions: 'Answer support mail' });
+		await vi.waitFor(() => expect(createAgentMock).toHaveBeenCalledOnce());
+
+		expect(createAgentMock.mock.calls[0]?.[3]).toMatchObject({
+			id: 'a1',
+			parentFolderId: 'support-folder',
+		});
+	});
+
 	it('does not persist a pending agent for an auto-applied default model', async () => {
 		history.replaceState({ instanceAiPendingAgentId: 'a1' }, '');
 		routeQuery.assistantThread = 'thread-abc';
@@ -1107,6 +1122,7 @@ describe('AgentBuilderView — preview routing', () => {
 	it('uses the agent the Assistant agent already created under the pending id', async () => {
 		history.replaceState({ instanceAiPendingAgentId: 'a1' }, '');
 		routeQuery.assistantThread = 'assistant-agent-thread';
+		routeQuery.folderId = 'support-folder';
 		rememberAssistantAgentThread('assistant-agent-thread', 'p1');
 		createAgentMock.mockRejectedValueOnce(
 			new ResponseError('An agent with this id already exists', { httpStatusCode: 409 }),
@@ -1120,6 +1136,8 @@ describe('AgentBuilderView — preview routing', () => {
 		);
 
 		expect(createAgentMock).toHaveBeenCalledOnce();
+		const { moveAgent } = await import('../composables/useAgentApi');
+		expect(moveAgent).toHaveBeenCalledWith(expect.anything(), 'p1', 'a1', 'support-folder');
 		expect(updateConfigMock).not.toHaveBeenCalled();
 		expect(fetchConfigMock).toHaveBeenCalledWith('p1', 'a1');
 		expect(editor.props('agentUnsaved')).toBe(false);

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AgentFolderDialog, { type AgentFolderAction } from '../components/AgentFolderDialog.vue';
 import { useAgentPromptInspiration } from '../composables/useAgentPromptInspiration';
 import { useAgentBuilderExperimentStore } from '@/experiments/agentBuilder/stores/agentBuilder.store';
 import {
@@ -68,6 +69,7 @@ import { buildAgentTestHref } from '../utils/agentTestUrl';
 import {
 	getAgent,
 	createAgent,
+	moveAgent,
 	createAgentTask,
 	deleteAgent,
 	listAgentFiles,
@@ -1720,6 +1722,7 @@ async function createPendingAgent(
 		projectId: targetProjectId,
 		agentId: targetAgentId,
 		name,
+		...(typeof route.query.folderId === 'string' ? { parentFolderId: route.query.folderId } : {}),
 		config: initialConfig,
 	};
 	if (props.artifactPersistAgent) {
@@ -1733,6 +1736,7 @@ async function createPendingAgent(
 	try {
 		return await createAgent(rootStore.restApiContext, targetProjectId, name, {
 			id: targetAgentId,
+			...(typeof route.query.folderId === 'string' ? { parentFolderId: route.query.folderId } : {}),
 			config: initialConfig,
 		});
 	} catch (error) {
@@ -1740,6 +1744,17 @@ async function createPendingAgent(
 		const lostInsert = error instanceof ResponseError && error.httpStatusCode === 409;
 		if (!aiThreadId.value || !lostInsert) throw error;
 		const existing = await getAgent(rootStore.restApiContext, targetProjectId, targetAgentId);
+
+		if (request.parentFolderId && existing.parentFolderId !== request.parentFolderId) {
+			await moveAgent(
+				rootStore.restApiContext,
+				targetProjectId,
+				targetAgentId,
+				request.parentFolderId,
+			);
+			existing.parentFolderId = request.parentFolderId;
+		}
+
 		return { ...existing, config: null, configHash: null, adopted: true };
 	}
 }
@@ -2762,8 +2777,18 @@ watch(
 	{ immediate: true },
 );
 
+const folderMoveAction = ref<AgentFolderAction | null>(null);
+
 const headerActions = computed(() => {
 	const actions: Array<ActionDropdownItem<string>> = [];
+
+	if (agent.value && effectiveCanEditAgent.value && settingsStore.isFoldersFeatureEnabled) {
+		actions.push({
+			id: 'move-folder',
+			label: locale.baseText('agents.folders.move'),
+			icon: 'folder',
+		});
+	}
 
 	// Same order as the workflow menu: description and favorite first, then import/export.
 	if (effectiveCanEditAgent.value) {
@@ -2900,6 +2925,16 @@ async function saveN8nChatDescription(description: string): Promise<void> {
 }
 
 async function onHeaderAction(action: string) {
+	if (action === 'move-folder') {
+		folderMoveAction.value = {
+			mode: 'moveAgent',
+			id: agentId.value,
+			parentFolderId: agent.value?.parentFolderId,
+		};
+
+		return;
+	}
+
 	if (action === 'edit-description') {
 		openDescriptionModal();
 		return;
@@ -3516,6 +3551,12 @@ useKeybindings({
 		]"
 		data-testid="agent-builder-layout"
 	>
+		<AgentFolderDialog
+			:project-id="projectId"
+			:action="folderMoveAction"
+			@close="folderMoveAction = null"
+			@saved="fetchAgent()"
+		/>
 		<AgentTestHeader
 			v-if="isStandalonePreview"
 			:agent-id="agentId"
