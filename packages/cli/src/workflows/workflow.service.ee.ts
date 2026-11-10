@@ -127,6 +127,16 @@ function assertNoneOwnedBy(workflows: WorkflowEntity[], destinationProject: Proj
 
 @Service()
 export class EnterpriseWorkflowService {
+	private async findWorkflowFolderInProject(folderId: string, projectId: string) {
+		const folder = await this.folderRepository.findOneOrFailFolderInProject(folderId, projectId);
+
+		if ((folder.resourceType ?? 'workflow') !== 'workflow') {
+			throw new TransferWorkflowError('This action requires a workflow folder');
+		}
+
+		return folder;
+	}
+
 	constructor(
 		private readonly logger: Logger,
 		private readonly sharedWorkflowRepository: SharedWorkflowRepository,
@@ -825,7 +835,7 @@ export class EnterpriseWorkflowService {
 
 		if (destinationParentFolderId) {
 			try {
-				parentFolder = await this.folderRepository.findOneOrFailFolderInProject(
+				parentFolder = await this.findWorkflowFolderInProject(
 					destinationParentFolderId,
 					destinationProjectId,
 				);
@@ -904,7 +914,7 @@ export class EnterpriseWorkflowService {
 		destinationProjectId: string,
 	): Promise<FolderTransferPreview> {
 		try {
-			await this.folderRepository.findOneOrFailFolderInProject(sourceFolderId, sourceProjectId);
+			await this.findWorkflowFolderInProject(sourceFolderId, sourceProjectId);
 		} catch {
 			throw new FolderNotFoundError(sourceFolderId);
 		}
@@ -995,7 +1005,7 @@ export class EnterpriseWorkflowService {
 
 	async getFolderUsedCredentials(user: User, folderId: string, projectId: string) {
 		try {
-			await this.folderRepository.findOneOrFailFolderInProject(folderId, projectId);
+			await this.findWorkflowFolderInProject(folderId, projectId);
 		} catch {
 			throw new FolderNotFoundError(folderId);
 		}
@@ -1057,13 +1067,10 @@ export class EnterpriseWorkflowService {
 		// 4. checks
 
 		if (destinationParentFolderId !== PROJECT_ROOT) {
-			await this.folderRepository.findOneOrFailFolderInProject(
-				destinationParentFolderId,
-				destinationProjectId,
-			);
+			await this.findWorkflowFolderInProject(destinationParentFolderId, destinationProjectId);
 		}
 
-		await this.folderRepository.findOneOrFailFolderInProject(sourceFolderId, sourceProjectId);
+		await this.findWorkflowFolderInProject(sourceFolderId, sourceProjectId);
 
 		assertNoneOwnedBy(workflows, destinationProject);
 

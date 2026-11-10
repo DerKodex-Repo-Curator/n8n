@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/unbound-method -- mock-based tests intentionally reference unbound methods */
 import type { AgentIntegrationConfig } from '@n8n/api-types';
-import { LIKE_ESCAPE_CLAUSE, type TransactionRunner } from '@n8n/db';
+import { LIKE_ESCAPE_CLAUSE, type FolderRepository, type TransactionRunner } from '@n8n/db';
 import { In } from '@n8n/typeorm';
 import { mock } from 'vitest-mock-extended';
 
@@ -17,7 +17,11 @@ describe('AgentRepository', () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
-		repository = new AgentRepository(mockDataSource as never, mock<TransactionRunner>());
+		repository = new AgentRepository(
+			mockDataSource as never,
+			mock<TransactionRunner>(),
+			mock<FolderRepository>(),
+		);
 	});
 
 	describe('findByIdAndProjectId', () => {
@@ -138,6 +142,7 @@ describe('AgentRepository', () => {
 				'agent.activeVersionId',
 				'agent.availableInMCP',
 				'agent.updatedAt',
+				'agent.parentFolderId',
 			]);
 			expect(mockQb.where).toHaveBeenCalledWith("agent.scope = 'project'");
 			expect(mockQb.andWhere).toHaveBeenCalledWith('agent.projectId IN (:...projectIds)', {

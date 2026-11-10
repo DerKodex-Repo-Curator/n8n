@@ -40,7 +40,7 @@ import { v4 as uuid } from 'uuid';
 // eslint-disable-next-line import-x/no-cycle
 import { CredentialsService } from '@/credentials/credentials.service';
 import type { PolicyActor } from '@/policy/policy-enforcement-backend';
-import { ConflictError, UnexpectedError, UserError } from '@n8n/errors';
+import { ConflictError, NotFoundError, UnexpectedError, UserError } from '@n8n/errors';
 
 import { AgentDefinitionService } from './agent-definition.service';
 import { getAgentOrThrow } from './utils/get-agent-or-throw';
@@ -83,6 +83,7 @@ import type {
 	PlannedAgentDestinations,
 } from './utils/agent-definition';
 import { buildAgentMutationEvent } from './agent-modification-telemetry.service';
+import { FolderService } from '@/services/folder.service';
 
 type CreateAgentOptions =
 	| DraftAgentCreateOptions
@@ -97,6 +98,7 @@ type CreateAgentOptions =
 	  };
 
 type DraftAgentCreateOptions = {
+	parentFolderId?: string | null;
 	/** Who asked for the create, named on the policy block audit event. */
 	actor: PolicyActor;
 	availableInMCP?: boolean;
@@ -151,6 +153,7 @@ export class AgentsService {
 		private readonly setupCompletion: AgentSetupCompletionService,
 		private readonly n8nChatFlag: N8nChatFlagService,
 		private readonly definitionService: AgentDefinitionService,
+		private readonly folderService: FolderService,
 	) {}
 
 	/**
@@ -191,6 +194,11 @@ export class AgentsService {
 			return await this.getCreationResult(agent, false);
 		}
 		this.assertCreateOptions(options);
+
+		if (options.parentFolderId) {
+			await this.folderService.validateDestination(options.parentFolderId, projectId, 'agent');
+		}
+
 		const { schemaConfig, integrations } = await this.prepareInitialConfig(
 			projectId,
 			name,
@@ -202,6 +210,7 @@ export class AgentsService {
 				id: options.id || generateNanoId(),
 				name,
 				projectId,
+				parentFolderId: options.parentFolderId ?? null,
 				schema: fromAgentDocument(schemaConfig).config,
 				...(integrations.length > 0 ? { integrations } : {}),
 				...(options.tools ? { tools: options.tools as Agent['tools'] } : {}),
@@ -490,7 +499,58 @@ export class AgentsService {
 		projectId: string,
 		options: ListAgentsQueryDto,
 	): Promise<AgentListResult> {
-		return await this.agentRepository.findByProjectIdsPaginated([projectId], options);
+		if (options.filter?.parentFolderId) {
+			await this.folderService.validateDestination(
+				options.filter.parentFolderId,
+				projectId,
+				'agent',
+			);
+		}
+
+		const result = await this.agentRepository.findByProjectIdsPaginated([projectId], options);
+
+		if (!options.filter?.query) {
+			return result;
+		}
+
+		const folderIds = [
+			...new Set(
+				result.data.flatMap((agent) => (agent.parentFolderId ? [agent.parentFolderId] : [])),
+			),
+		];
+		const paths = new Map<string, string[]>();
+
+		for (const folderId of folderIds) {
+			const tree = await this.folderService.getFolderTree(folderId, projectId);
+			const path: string[] = [];
+			let node = tree[0];
+
+			while (node) {
+				path.push(node.name);
+				node = node.children[0];
+			}
+
+			paths.set(folderId, path);
+		}
+
+		return {
+			...result,
+			data: result.data.map((agent) =>
+				Object.assign(agent, {
+					folderPath: agent.parentFolderId ? (paths.get(agent.parentFolderId) ?? []) : [],
+				}),
+			),
+		};
+	}
+
+	async move(agentId: string, projectId: string, parentFolderId: string | null): Promise<boolean> {
+		await this.settingsService.assertEnabled();
+
+		if (parentFolderId) {
+			await this.folderService.validateDestination(parentFolderId, projectId, 'agent');
+		}
+
+		return await this.agentRepository.moveToFolder(agentId, projectId, parentFolderId);
 	}
 
 	async findById(agentId: string, projectId: string): Promise<ProjectAgent | null> {
@@ -579,6 +639,16 @@ export class AgentsService {
 		projectIds: string[] | null,
 		options: AgentSummaryFilters = {},
 	): Promise<AgentSummary[]> {
+		if (options.parentFolderId) {
+			const [folder] = await this.folderService.getFoldersByIds([options.parentFolderId]);
+
+			if (!folder || (projectIds !== null && !projectIds.includes(folder.homeProject.id))) {
+				throw new NotFoundError('Agent folder not found');
+			}
+
+			this.folderService.assertResourceType(folder, 'agent');
+		}
+
 		return await this.agentRepository.findSummariesByProjectIds(projectIds, options);
 	}
 

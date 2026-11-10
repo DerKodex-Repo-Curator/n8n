@@ -7,6 +7,7 @@ import type {
 } from '@n8n/api-types';
 import {
 	BaseRepository,
+	FolderRepository,
 	chunkIds,
 	escapeLike,
 	LIKE_ESCAPE_CLAUSE,
@@ -33,7 +34,16 @@ export interface AgentListResult {
 }
 
 export type AgentSummary = ProjectScoped<
-	Pick<Agent, 'id' | 'name' | 'projectId' | 'activeVersionId' | 'availableInMCP' | 'updatedAt'>
+	Pick<
+		Agent,
+		| 'id'
+		| 'name'
+		| 'projectId'
+		| 'parentFolderId'
+		| 'activeVersionId'
+		| 'availableInMCP'
+		| 'updatedAt'
+	>
 >;
 
 /** Instance agents are code-defined and read-only, so project queries must not see them. */
@@ -60,6 +70,7 @@ export type AgentIntegrationState = Pick<Agent, 'integrations' | 'versionId' | '
 export type AgentImportIdentity = Pick<Agent, 'id' | 'name' | 'projectId'>;
 
 export type AgentSummaryFilters = {
+	parentFolderId?: string | null;
 	query?: string;
 	publishedOnly?: boolean;
 	excludeAgentId?: string;
@@ -68,7 +79,11 @@ export type AgentSummaryFilters = {
 
 @Service()
 export class AgentRepository extends BaseRepository<Agent> {
-	constructor(dataSource: DataSource, transactionRunner: TransactionRunner) {
+	constructor(
+		dataSource: DataSource,
+		transactionRunner: TransactionRunner,
+		private readonly folderRepository: FolderRepository,
+	) {
 		super(Agent, dataSource.manager, transactionRunner);
 	}
 
@@ -78,6 +93,10 @@ export class AgentRepository extends BaseRepository<Agent> {
 	 * update that row instead of colliding on the primary key.
 	 */
 	async insertNew(agent: Agent, ctx: OperationContext = {}): Promise<void> {
+		if (agent.scope === 'instance' && agent.parentFolderId) {
+			throw new UnexpectedError('Instance agents cannot have folders');
+		}
+
 		// `schema` is a free-form JSON column, which QueryDeepPartialEntity
 		// cannot express, so cast at this boundary.
 		await this.managerFor(ctx).insert(Agent, agent as QueryDeepPartialEntity<Agent>);
@@ -203,6 +222,7 @@ export class AgentRepository extends BaseRepository<Agent> {
 				'agent.activeVersionId',
 				'agent.availableInMCP',
 				'agent.updatedAt',
+				'agent.parentFolderId',
 			])
 			.where(projectScopeSql)
 			.orderBy('agent.updatedAt', 'DESC');
@@ -214,6 +234,14 @@ export class AgentRepository extends BaseRepository<Agent> {
 			// `%` and `_` in the search match themselves, as in the skill search.
 			query.andWhere(`LOWER(agent.name) LIKE :query ${LIKE_ESCAPE_CLAUSE}`, {
 				query: `%${escapeLike(options.query.toLowerCase())}%`,
+			});
+		}
+
+		if (options.parentFolderId === null) {
+			query.andWhere('agent.parentFolderId IS NULL');
+		} else if (options.parentFolderId !== undefined) {
+			query.andWhere('agent.parentFolderId = :parentFolderId', {
+				parentFolderId: options.parentFolderId,
 			});
 		}
 		if (options.publishedOnly) {
@@ -254,7 +282,20 @@ export class AgentRepository extends BaseRepository<Agent> {
 		if (projectIds !== null) {
 			query.andWhere('agent.projectId IN (:...projectIds)', { projectIds });
 		}
-		this.applyFilters(query, options.filter);
+		if (options.filter?.includeDescendants && options.filter.parentFolderId) {
+			const folderIds = [
+				options.filter.parentFolderId,
+				...(await this.folderRepository.getAllFolderIdsInHierarchy(
+					options.filter.parentFolderId,
+					undefined,
+					'agent',
+				)),
+			];
+			query.andWhere('agent.parentFolderId IN (:...folderIds)', { folderIds });
+			this.applyFilters(query, { ...options.filter, parentFolderId: undefined });
+		} else {
+			this.applyFilters(query, options.filter);
+		}
 		this.applySorting(query, options.sortBy, usageCounts);
 		query.skip(options.skip).take(options.take);
 
@@ -368,6 +409,14 @@ export class AgentRepository extends BaseRepository<Agent> {
 		query: SelectQueryBuilder<Agent>,
 		filter: ListAgentsQueryDto['filter'],
 	): void {
+		if (filter?.parentFolderId === null) {
+			query.andWhere('agent.parentFolderId IS NULL');
+		} else if (filter?.parentFolderId !== undefined) {
+			query.andWhere('agent.parentFolderId = :parentFolderId', {
+				parentFolderId: filter.parentFolderId,
+			});
+		}
+
 		if (filter?.query) {
 			query.andWhere('LOWER(agent.name) LIKE LOWER(:query)', { query: `%${filter.query}%` });
 		}
@@ -478,6 +527,82 @@ export class AgentRepository extends BaseRepository<Agent> {
 				where: { id, projectId, scope: projectScope },
 				relations: { activeVersion: true },
 			}),
+		);
+	}
+
+	async moveToFolder(
+		agentId: string,
+		projectId: string,
+		parentFolderId: string | null,
+		ctx: OperationContext = {},
+	): Promise<boolean> {
+		const result = await this.managerFor(ctx).update(
+			Agent,
+			{ id: agentId, projectId, scope: projectScope },
+			{ parentFolderId },
+		);
+
+		return (result.affected ?? 0) > 0;
+	}
+
+	async findIdsInFoldersForExport(folderIds: string[]): Promise<string[]> {
+		const ids: string[] = [];
+
+		for (const batch of chunkIds([...new Set(folderIds)])) {
+			const agents = await this.find({
+				where: { scope: projectScope, parentFolderId: In(batch) },
+				select: { id: true },
+			});
+			ids.push(...agents.map((agent) => agent.id));
+		}
+
+		return ids;
+	}
+
+	async findInFolders(projectId: string, folderIds: string[]): Promise<ProjectAgent[]> {
+		const agents: ProjectAgent[] = [];
+
+		for (const batch of chunkIds([...new Set(folderIds)])) {
+			const found = await this.find({
+				where: { projectId, scope: projectScope, parentFolderId: In(batch) },
+			});
+			agents.push(...found.filter(isProjectAgent));
+		}
+
+		return agents;
+	}
+
+	async countByFolder(projectId: string, folderIds: string[]): Promise<Map<string, number>> {
+		const counts = new Map<string, number>();
+
+		for (const batch of chunkIds([...new Set(folderIds)])) {
+			const rows = await this.createQueryBuilder('agent')
+				.select('agent.parentFolderId', 'folderId')
+				.addSelect('COUNT(agent.id)', 'count')
+				.where(projectScopeSql)
+				.andWhere('agent.projectId = :projectId', { projectId })
+				.andWhere('agent.parentFolderId IN (:...folderIds)', { folderIds: batch })
+				.groupBy('agent.parentFolderId')
+				.getRawMany<{ folderId: string; count: string }>();
+
+			for (const row of rows) {
+				counts.set(row.folderId, Number(row.count));
+			}
+		}
+
+		return counts;
+	}
+
+	async relocateFolderContents(
+		projectId: string,
+		fromFolderId: string,
+		toFolderId: string | null,
+		ctx: OperationContext,
+	): Promise<void> {
+		await this.managerFor(ctx).update(
+			Agent,
+			{ projectId, scope: projectScope, parentFolderId: fromFolderId },
+			{ parentFolderId: toFolderId },
 		);
 	}
 

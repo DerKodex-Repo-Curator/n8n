@@ -78,6 +78,7 @@ erDiagram
   varchar_36_ id
   json integrations
   varchar_128_ name
+  varchar_36_ parentFolderId FK
   varchar_255_ projectId FK
   integer publicationRevision
   integer revision

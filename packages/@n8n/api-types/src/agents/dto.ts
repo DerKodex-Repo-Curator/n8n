@@ -82,6 +82,8 @@ const agentListFilterSchema = z
 		ids: z.array(z.string().min(1)).min(1).max(50).optional(),
 		availableInMCP: z.boolean().optional(),
 		availableInChat: z.boolean().optional(),
+		parentFolderId: z.string().min(1).max(36).nullable().optional(),
+		includeDescendants: z.boolean().optional(),
 	})
 	.strict();
 
@@ -197,6 +199,7 @@ export const clientMintedAgentIdSchema = z.string().regex(/^[0-9A-Za-z]{16}$/);
 
 const createAgentShape = {
 	name: z.string().min(1),
+	parentFolderId: z.string().min(1).max(36).nullable().optional(),
 	id: clientMintedAgentIdSchema.optional(),
 	config: z.record(z.unknown()).optional(),
 	schema: AgentJsonConfigSchema.optional(),
@@ -217,6 +220,8 @@ const createAgentSchema = z
 type CreateAgent = z.infer<typeof createAgentSchema>;
 
 export class CreateAgentDto implements CreateAgent {
+	declare parentFolderId?: CreateAgent['parentFolderId'];
+
 	declare name: CreateAgent['name'];
 
 	declare id?: CreateAgent['id'];
@@ -243,6 +248,10 @@ export class CreateAgentDto implements CreateAgent {
 		return createAgentSchema.parse(data);
 	}
 }
+
+export class MoveAgentDto extends Z.class({
+	parentFolderId: z.string().min(1).max(36).nullable(),
+}) {}
 
 export class UpdateAgentConfigDto extends Z.class({
 	config: z.record(z.unknown()),

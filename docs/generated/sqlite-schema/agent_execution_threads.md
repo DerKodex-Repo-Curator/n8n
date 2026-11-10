@@ -101,6 +101,7 @@ erDiagram
   varchar_36_ id PK
   TEXT integrations
   varchar_128_ name
+  varchar_36_ parentFolderId FK
   varchar_255_ projectId FK
   INTEGER publicationRevision
   INTEGER revision
