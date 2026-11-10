@@ -1,6 +1,8 @@
 import { createPinia, setActivePinia } from 'pinia';
 import { mock } from 'vitest-mock-extended';
 import type { Router } from 'vue-router';
+import { stringify } from 'flatted';
+import type { ExecutionError, IRunData } from 'n8n-workflow';
 import { executionStarted } from './executionStarted';
 import {
 	createWorkflowDocumentId,
@@ -9,6 +11,8 @@ import {
 import type { ExecutionStarted } from '@n8n/api-types/push/execution';
 import { useWorkflowExecutionStateStore } from '@/app/stores/workflowExecutionState.store';
 import { createExecutionDataId, useExecutionDataStore } from '@/app/stores/executionData.store';
+import { useWorkflowsStore } from '@/app/stores/workflows.store';
+import { createTestNode, createTestTaskData } from '@/__tests__/mocks';
 import type { PushHandlerOptions } from './types';
 
 describe('executionStarted', () => {
@@ -30,8 +34,54 @@ describe('executionStarted', () => {
 
 		const workflowDocumentStore = useWorkflowDocumentStore(documentId);
 		workflowDocumentStore.setName('My Workflow');
+		useWorkflowsStore().setWorkflowId('wf-123');
 
 		workflowExecutionStateStore = useWorkflowExecutionStateStore(documentId);
+	});
+
+	describe('node execution issues', () => {
+		const AGENT = 'Agent';
+		const FAILED_TASK = createTestTaskData({
+			executionStatus: 'error',
+			error: { message: 'invalid x-api-key' } as ExecutionError,
+		});
+
+		function agentExecutionIssue(): boolean | undefined {
+			return useWorkflowDocumentStore(documentId).getNodeByName(AGENT)?.issues?.execution;
+		}
+
+		async function startWithRunData(runData: IRunData): Promise<void> {
+			await executionStarted(
+				{
+					type: 'executionStarted',
+					data: {
+						executionId: 'exec-1',
+						workflowId: 'wf-123',
+						flattedRunData: stringify(runData),
+					} as ExecutionStarted['data'],
+				},
+				options,
+			);
+		}
+
+		beforeEach(() => {
+			const workflowDocumentStore = useWorkflowDocumentStore(documentId);
+			workflowDocumentStore.addNode(createTestNode({ name: AGENT }));
+			workflowDocumentStore.setNodeIssue({ node: AGENT, type: 'execution', value: true });
+			workflowExecutionStateStore.setActiveExecutionId(null);
+		});
+
+		it('keeps a node execution issue when the started run data has a failed task for the node', async () => {
+			await startWithRunData({ [AGENT]: [FAILED_TASK] });
+
+			expect(agentExecutionIssue()).toBe(true);
+		});
+
+		it('clears a node execution issue when the started run data has no task for the node', async () => {
+			await startWithRunData({ 'Make Notes': [createTestTaskData()] });
+
+			expect(agentExecutionIssue()).toBeUndefined();
+		});
 	});
 
 	it('should skip when activeExecutionId is undefined', async () => {

@@ -2,6 +2,7 @@ import type { ExecutionStarted } from '@n8n/api-types/push/execution';
 import { useWorkflowDocumentStore } from '@/app/stores/workflowDocument.store';
 import { useWorkflowExecutionStateStore } from '@/app/stores/workflowExecutionState.store';
 import { createExecutionDataId, useExecutionDataStore } from '@/app/stores/executionData.store';
+import { useNodeHelpers } from '@/app/composables/useNodeHelpers';
 import { parse } from 'flatted';
 import { createRunExecutionData } from 'n8n-workflow';
 import type { IRunExecutionData } from 'n8n-workflow';
@@ -70,5 +71,6 @@ export async function executionStarted(
 				runData: parse(data.flattedRunData),
 			},
 		} as IRunExecutionData);
+		useNodeHelpers().updateNodesExecutionIssues();
 	}
 }
