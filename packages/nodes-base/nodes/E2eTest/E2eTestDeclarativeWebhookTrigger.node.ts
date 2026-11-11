@@ -84,6 +84,11 @@ export class E2eTestDeclarativeWebhookTrigger implements INodeType {
 						headers: { 'X-Hook-Secret': '={{ $webhookRequest.headers["x-hook-secret"] }}' },
 					},
 				},
+				verification: {
+					algorithm: 'hmac-sha256',
+					signatureHeader: 'x-hook-signature',
+					secret: '={{ $staticData.hookSecret }}',
+				},
 				ping: { when: '={{ $webhookRequest.body.type === "ping" }}', response: 'pong' },
 				filter: {
 					allowed: '={{ $parameter.events }}',
