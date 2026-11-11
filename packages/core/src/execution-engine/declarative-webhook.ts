@@ -4,6 +4,7 @@ import type {
 	DeclarativeWebhookCheckExists,
 	DeclarativeWebhookCreate,
 	DeclarativeWebhookDelete,
+	DeclarativeWebhookHandshake,
 	IDataObject,
 	IDeclarativeWebhookTrigger,
 	IHookFunctions,
@@ -22,6 +23,7 @@ import {
 	UnexpectedError,
 } from 'n8n-workflow';
 import { randomBytes, randomInt, randomUUID } from 'node:crypto';
+import { validateHeaderValue } from 'node:http';
 
 import { ExecuteSingleContext, HookContext, WebhookContext } from './node-execution-context';
 import type { NodeExecutionContext } from './node-execution-context/node-execution-context';
@@ -36,14 +38,18 @@ const LOCALHOST_NAMES = ['localhost', '127.0.0.1', '[::1]'];
 // A node with a function `create` has no `store`, so it lists its keys in `managedKeys`.
 function clearManagedKeys(trigger: IDeclarativeWebhookTrigger, staticData: IDataObject) {
 	const { create } = trigger.lifecycle;
-	const keys =
-		trigger.managedKeys ?? (typeof create === 'function' ? [] : Object.keys(create.store ?? {}));
+	const keys = trigger.managedKeys ?? [
+		...(typeof create === 'function' ? [] : Object.keys(create.store ?? {})),
+		...Object.keys(trigger.handler?.handshake?.store ?? {}),
+	];
 	for (const key of keys) delete staticData[key];
 }
 
+type ResolveContext = Pick<NodeExecutionContext, 'workflow' | 'node' | 'mode'>;
+
 // One pass only: response and request values that start with "=" stay literal strings.
 const resolve = (
-	context: Pick<NodeExecutionContext, 'workflow' | 'node' | 'mode'>,
+	context: ResolveContext,
 	value: string,
 	extraKeys: IWorkflowDataProxyAdditionalKeys,
 ) =>
@@ -60,7 +66,7 @@ const resolve = (
 
 /** Writes the `store` values to the static data. Returns the keys that resolved to `undefined`. */
 function applyStore(
-	context: HookContext,
+	context: ResolveContext,
 	store: Record<string, string> | undefined,
 	extraKeys: IWorkflowDataProxyAdditionalKeys,
 	staticData: IDataObject,
@@ -159,6 +165,7 @@ function generateSecret({ type, length, prefix = '' }: DeclarativeSecretGenerato
 
 function createCreate(
 	nodeType: INodeType,
+	trigger: IDeclarativeWebhookTrigger,
 	config: DeclarativeWebhookCreate,
 	deleteHook?: HookMethod,
 ): WebhookMethods['create'] {
@@ -184,6 +191,9 @@ function createCreate(
 			$generated[name] = generateSecret(generator);
 		}
 		const requestKeys = { ...extraKeys, $generated };
+
+		// A new hook gets a new handshake. An old value would block it, because a handshake fills only empty keys.
+		for (const key of Object.keys(trigger.handler?.handshake?.store ?? {})) delete staticData[key];
 
 		const [response] = await runStandaloneRouting(context, nodeType, config.routing, requestKeys);
 		const $response = response?.json ?? {};
@@ -244,7 +254,8 @@ export function createDeclarativeWebhookMethods(
 					async function (this: IHookFunctions) {
 						return await registerAgain(this, deleteHook);
 					}),
-		create: typeof create === 'object' ? createCreate(nodeType, create, deleteHook) : create,
+		create:
+			typeof create === 'object' ? createCreate(nodeType, trigger, create, deleteHook) : create,
 		delete: deleteHook ?? (typeof del === 'function' ? del : async () => true),
 	};
 }
@@ -306,9 +317,48 @@ async function shapeItems(
 	return items;
 }
 
-/** Builds the default `webhook()` of a declarative webhook trigger. Stage order: ping, filter, output. */
+/** Writes `store`, sets the configured reply and starts no workflow. */
+function respondToHandshake(
+	context: WebhookContext,
+	handshake: DeclarativeWebhookHandshake,
+	extraKeys: IWorkflowDataProxyAdditionalKeys,
+): IWebhookResponseData {
+	const staticData = context.getWorkflowStaticData('node');
+	// Fill only empty keys, so a later handshake does not replace a stored value. Concurrent requests are not atomic: the last save wins.
+	const store = Object.entries(handshake.store ?? {}).filter(([key]) => !staticData[key]);
+	applyStore(context, Object.fromEntries(store), extraKeys, staticData);
+
+	const { body, statusCode = 200, contentType, headers = {} } = handshake.respond ?? {};
+	const res = context.getResponseObject();
+	for (const [name, value] of Object.entries(headers)) {
+		const header = resolve(context, value, extraKeys);
+		const text = typeof header === 'string' ? header : JSON.stringify(header);
+		try {
+			// Skip a missing or invalid value, as the server does for response headers.
+			validateHeaderValue(name, text);
+		} catch {
+			continue;
+		}
+		res.setHeader(name, text);
+	}
+	if (contentType) res.setHeader('content-type', contentType);
+	const resolved = body === undefined ? 'OK' : resolve(context, body, extraKeys);
+	// With `undefined`, the server would send its default message.
+	const value = resolved === undefined ? '' : resolved;
+	// The server replies after it saves the static data, so the vendor cannot send a delivery before the value is stored.
+	if (statusCode === 200) return { webhookResponse: value };
+
+	// The server sets the status of the route, so another status needs a direct reply.
+	res.status(statusCode);
+	// The same rule as the server reply: a string is sent as it is, other values as JSON.
+	if (typeof value === 'string') res.send(value);
+	else res.json(value);
+	return { noWebhookResponse: true };
+}
+
+/** Builds the default `webhook()` of a declarative webhook trigger. Stage order: handshake, ping, filter, output. */
 export function createDeclarativeWebhook(trigger: IDeclarativeWebhookTrigger) {
-	const { ping, filter, output } = trigger.handler ?? {};
+	const { handshake, ping, filter, output } = trigger.handler ?? {};
 	return async function (this: IWebhookFunctions): Promise<IWebhookResponseData> {
 		if (!(this instanceof WebhookContext)) {
 			throw new UnexpectedError('Declarative webhook trigger needs a WebhookContext');
@@ -318,6 +368,18 @@ export function createDeclarativeWebhook(trigger: IDeclarativeWebhookTrigger) {
 		const query = this.getQueryData();
 		const request = { body, headers, query };
 		const extraKeys: IWorkflowDataProxyAdditionalKeys = { $webhookRequest: request };
+
+		if (this.getWebhookName() === 'setup') {
+			if (handshake?.when !== undefined && !resolve(this, handshake.when, extraKeys)) {
+				this.getResponseObject().status(401).send('Unauthorized');
+				return { noWebhookResponse: true };
+			}
+			return respondToHandshake(this, handshake ?? {}, extraKeys);
+		}
+
+		if (handshake?.when !== undefined && resolve(this, handshake.when, extraKeys)) {
+			return respondToHandshake(this, handshake, extraKeys);
+		}
 
 		if (ping && resolve(this, ping.when, extraKeys)) {
 			return {

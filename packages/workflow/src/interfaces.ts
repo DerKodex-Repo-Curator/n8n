@@ -3084,14 +3084,32 @@ export interface IDeclarativeWebhookTrigger {
 		/** Omit when there is nothing to deregister. */
 		delete?: DeclarativeHookMethod | DeclarativeWebhookDelete;
 	};
-	/** Static-data keys to clear when the webhook is gone. Default: the keys of `create.store`. */
+	/** Static-data keys to clear when the webhook is gone. Default: the keys of `create.store` and `handler.handshake.store`. */
 	managedKeys?: string[];
 	/** Handles each request. Without it, the trigger emits the request body. */
 	handler?: DeclarativeWebhookHandler;
 }
 
+/** A vendor request that confirms the endpoint. It starts no workflow. */
+export interface DeclarativeWebhookHandshake {
+	/** On `default`, a truthy result makes the request a handshake. On `setup`, a falsy result replies 401. */
+	when?: string;
+	/** Static data to write from the request. A key that has a value keeps it. */
+	store?: Record<string, string>;
+	respond?: {
+		/** Default `OK`. */
+		body?: string;
+		/** Default 200. */
+		statusCode?: number;
+		contentType?: string;
+		headers?: Record<string, string>;
+	};
+}
+
 /** The request stages of a declarative webhook trigger, in run order. Expressions can use `$webhookRequest`. */
 export interface DeclarativeWebhookHandler {
+	/** Runs first. On a `setup` endpoint, every request is a handshake. */
+	handshake?: DeclarativeWebhookHandshake;
 	/** If `when` is truthy, reply with `response` (default `OK`) and start no workflow. */
 	ping?: { when: string; response?: string };
 	/** Start the workflow only if `actual` is in `allowed` (a string is one item). A `wildcard` in `allowed` accepts all. */
