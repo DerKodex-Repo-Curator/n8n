@@ -46,5 +46,9 @@ export async function runStandaloneRouting(
 		},
 	};
 	const routingNode = new RoutingNode(executeContext, routingNodeType, undefined, extraKeys);
-	return (await routingNode.runNode())?.[0] ?? [];
+	const items = (await routingNode.runNode())?.[0] ?? [];
+	// "On Error: Continue" returns a failed request as an item. A trigger cannot output it.
+	const failed = items.find((item) => item.error);
+	if (failed?.error) throw failed.error;
+	return items;
 }

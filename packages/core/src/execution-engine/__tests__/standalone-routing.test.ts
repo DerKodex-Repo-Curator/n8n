@@ -89,6 +89,18 @@ describe('runStandaloneRouting', () => {
 		]);
 	});
 
+	test('throws a failed request also when the node continues on error', async () => {
+		httpRequest.mockRejectedValueOnce(new Error('Service unavailable'));
+
+		await expect(
+			runStandaloneRouting(
+				{ ...context, node: { ...node, onError: 'continueRegularOutput' } },
+				nodeType,
+				{ request: { url: '/items' } },
+			),
+		).rejects.toThrow('Service unavailable');
+	});
+
 	describe('extra keys', () => {
 		test('are available when the request is built', async () => {
 			respond({});
