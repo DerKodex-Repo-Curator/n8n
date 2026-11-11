@@ -18,6 +18,7 @@ import type {
 import { getWorkflowConsumerIds } from '@/modules/n8n-packages/spec/requirement-consumers';
 import type { PackageRequirementConsumer } from '@/modules/n8n-packages/spec/requirements.schema';
 
+import type { PlannedChange } from './apply-preview';
 import { PACKAGE_SUBFOLDER } from './constants';
 
 /** One side of the comparison: its manifest, and the Git blob SHA of each file path. */
@@ -43,19 +44,6 @@ export type SideResource = {
 
 export type SideIndex = ReadonlyMap<string, SideResource>;
 
-/**
- * Resources that already exist on this instance, but that no local workflow uses, so the local
- * export does not hold them. Apply reuses them instead of creating them. Maps hold the local names.
- */
-export type ApplyDestination = {
-	credentialNames: ReadonlyMap<string, string>;
-	/** The local tag that Apply uses for each branch tag ID, with its blob SHA. */
-	tags: ReadonlyMap<string, { id: string; name: string; blobSha: string }>;
-	variableKeys: ReadonlySet<string>;
-	/** The blob SHA of each data table, serialized as the package stores it. */
-	dataTables: ReadonlyMap<string, { blobSha: string }>;
-};
-
 const RESOURCE_TYPES = {
 	projects: 'project',
 	folders: 'folder',
@@ -65,9 +53,6 @@ const RESOURCE_TYPES = {
 	variables: 'variable',
 	tags: 'tag',
 } as const satisfies Partial<Record<ManifestEntityCollection, PromotionResourceType>>;
-
-/** Apply keeps the existing state of these resources, so their changes do not show on Apply. */
-const KEPT_BY_APPLY = new Set<PromotionResourceType>(['project', 'credential', 'variable']);
 
 const TYPE_ORDER: PromotionResourceType[] = [
 	'project',
@@ -247,15 +232,11 @@ function applyOperationRules(
 	{
 		direction,
 		before,
-		after,
-		desired,
-		destination,
+		planned,
 	}: {
 		direction: PromotionDirection;
 		before: SideResource | undefined;
-		after: SideResource | undefined;
-		desired: SideIndex;
-		destination: ApplyDestination | null;
+		planned: ReadonlyMap<string, PlannedChange> | null;
 	},
 ): PromotionResource | null {
 	const { type, change } = resource;
@@ -274,62 +255,37 @@ function applyOperationRules(
 		if (type !== 'workflow') return unchanged();
 	}
 
-	if (direction === 'promote') {
-		// Promote writes a folder only together with a workflow inside it.
-		if (
-			type === 'folder' &&
-			change !== 'unchanged' &&
-			after &&
-			workflowsInside(desired, after.target).length === 0
-		) {
-			return null;
-		}
+	if (direction === 'promote') return resource;
+
+	// The import plan decides for projects, folders, tags, data tables and bound credentials. A tag
+	// can exist here under another name or id, so the files of the two sides do not tell. A folder
+	// that Apply moves or renames within its project keeps the change of the comparison.
+	const plannedChange = planned?.get(resource.key);
+	if (!plannedChange) {
+		// Without a plan entry, Apply does not write a credential or a variable. One that this
+		// instance lacks stays `added`, so the page can ask for it.
+		if ((type === 'credential' || type === 'variable') && change !== 'added') return unchanged();
 		return resource;
 	}
-
-	// Apply keeps the names and properties of existing projects, and the values of existing
-	// credentials and variables. It renames tags. It moves and renames a folder within its project.
-	if (change === 'modified') {
-		if (type === 'folder') {
-			return resource.previousName !== undefined || resource.previousParentKey !== undefined
-				? resource
-				: unchanged();
-		}
-		if (KEPT_BY_APPLY.has(type)) return unchanged();
+	if (plannedChange.change === 'unchanged') {
+		return {
+			...unchanged(),
+			...(plannedChange.name !== undefined ? { name: plannedChange.name } : {}),
+		};
 	}
+	const previousName = plannedChange.previousName ?? resource.previousName;
+	return {
+		...withoutChanges,
+		change: plannedChange.change,
+		...(previousName !== undefined ? { previousName } : {}),
+		...(plannedChange.previousId !== undefined ? { previousId: plannedChange.previousId } : {}),
+	};
+}
 
-	if (change === 'added' && destination) {
-		// Apply renames the local tag with the branch ID, or moves the local tag with the branch name
-		// to the branch ID. Tags are instance-wide, so this also changes workflows outside the project.
-		const localTag = type === 'tag' ? destination.tags.get(resource.id) : undefined;
-		if (localTag) {
-			const revision = { ...resource.revision, before: localTag.blobSha };
-			if (localTag.id !== resource.id) {
-				return { ...withoutChanges, change: 'modified', previousId: localTag.id, revision };
-			}
-			if (localTag.name !== resource.name) {
-				return { ...withoutChanges, change: 'modified', previousName: localTag.name, revision };
-			}
-			return { ...withoutChanges, change: 'unchanged', revision };
-		}
-
-		let localName: string | undefined;
-		if (type === 'credential') localName = destination.credentialNames.get(resource.id);
-		if (type === 'variable' && destination.variableKeys.has(resource.key))
-			localName = resource.name;
-		if (localName !== undefined) return { ...withoutChanges, name: localName, change: 'unchanged' };
-
-		const localTable = type === 'dataTable' ? destination.dataTables.get(resource.id) : undefined;
-		if (localTable) {
-			return {
-				...resource,
-				change: localTable.blobSha === resource.revision.after ? 'unchanged' : 'modified',
-				revision: { ...resource.revision, before: localTable.blobSha },
-			};
-		}
-	}
-
-	return resource;
+/** A workflow, or a project or folder that the operation adds or changes. */
+function isSelectable({ type, change }: PromotionResource): boolean {
+	if (type === 'workflow') return true;
+	return (type === 'project' || type === 'folder') && (change === 'added' || change === 'modified');
 }
 
 function compareResource(
@@ -444,7 +400,11 @@ export function buildPreview({
 	 * The operation whose rules decide what changes. `null` lists every difference between the
 	 * sides: a review shows what its commits already changed, which an operation did not write.
 	 */
-	operation: { direction: PromotionDirection; destination: ApplyDestination | null } | null;
+	operation: {
+		direction: PromotionDirection;
+		/** Apply only: what the import plan does, by resource key. */
+		planned: ReadonlyMap<string, PlannedChange> | null;
+	} | null;
 	/** Both sides are indexed across all of them, so a workflow that moves between them stays one row. */
 	projectIds: readonly string[];
 	base: PreviewSide;
@@ -460,10 +420,9 @@ export function buildPreview({
 		const current = after ?? before;
 		if (!current) continue;
 		const compared = compareResource(current, before, after);
-		const resource = operation
-			? applyOperationRules(compared, { ...operation, before, after, desired: desiredIndex })
-			: compared;
-		if (resource) all.set(key, resource);
+		const resource = operation ? applyOperationRules(compared, { ...operation, before }) : compared;
+		if (resource)
+			all.set(key, operation ? { ...resource, selectable: isSelectable(resource) } : resource);
 	}
 
 	const { links, missingWorkflows } = dependencyLinks(desired, desiredIndex, projectIds);
@@ -481,11 +440,15 @@ export function buildPreview({
 	for (const link of dependencies) {
 		if (listed.has(link.resourceKey) && link.included) listed.add(link.workflowKey);
 	}
-	// Promote selects whole containers, so it lists the workflows inside a changed one.
-	if (operation?.direction === 'promote') {
+	// Promote selects whole containers, so it lists the workflows inside a changed one. Apply moves
+	// or renames a folder only together with a selected workflow inside it, so it lists those too.
+	if (operation) {
 		for (const key of [...listed]) {
 			const container = desiredIndex.get(key);
-			if (container?.type !== 'folder' && container?.type !== 'project') continue;
+			const listsInside =
+				container?.type === 'folder' ||
+				(operation.direction === 'promote' && container?.type === 'project');
+			if (!container || !listsInside) continue;
 			for (const workflow of workflowsInside(desiredIndex, container.target))
 				listed.add(workflow.key);
 		}

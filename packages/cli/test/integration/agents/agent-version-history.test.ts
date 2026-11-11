@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { AgentDefinitionService } from '@/modules/agents/agent-definition.service';
 import { AgentSkillRefsService } from '@/modules/agents/agent-skill-refs.service';
 import { AgentTaskRepository } from '@/modules/agents/repositories/agent-task.repository';
-import { registerSkillAgentsProvider } from '@/modules/agents/register-skill-agents-provider';
+import { registerSkillUsage } from '@/modules/agents/register-skill-usage';
 import {
 	markAgentDraftDirty,
 	saveAgentDraftFenced,
@@ -46,7 +46,7 @@ describe('Agent version history', () => {
 		});
 		await testModules.loadModules(['skills', 'agents']);
 		await testDb.init();
-		registerSkillAgentsProvider();
+		registerSkillUsage();
 		owner = await createOwner();
 		projectId = (await createTeamProject()).id;
 		agents = Container.get(AgentRepository);
@@ -69,7 +69,7 @@ describe('Agent version history', () => {
 				versionId,
 			}),
 		);
-		await history.saveVersion({ agentId, versionId, schema, tools: {}, savedBy: owner });
+		await history.saveVersion({ agentId, versionId, schema, tools: {}, savedBy: owner }, {});
 	});
 
 	afterEach(async () => {
@@ -101,12 +101,12 @@ describe('Agent version history', () => {
 	});
 
 	it('edits labels without changing content, save time, or publication state', async () => {
-		const saved = await history.findByVersionAndAgentId(versionId, agentId);
+		const saved = await history.findByVersionAndAgentId(versionId, agentId, {});
 		await service.updateVersionMetadata(agentId, projectId, versionId, {
 			name: 'Release',
 			description: 'Ready for support',
 		});
-		expect(await history.findByVersionAndAgentId(versionId, agentId)).toMatchObject({
+		expect(await history.findByVersionAndAgentId(versionId, agentId, {})).toMatchObject({
 			name: 'Release',
 			description: 'Ready for support',
 			schema,
@@ -131,7 +131,7 @@ describe('Agent version history', () => {
 		});
 		expect(summary).not.toHaveProperty('schema');
 		await service.updateVersionMetadata(agentId, projectId, versionId, { name: null });
-		expect(await history.findByVersionAndAgentId(versionId, agentId)).toMatchObject({
+		expect(await history.findByVersionAndAgentId(versionId, agentId, {})).toMatchObject({
 			name: null,
 			description: 'Ready for support',
 		});
@@ -266,7 +266,7 @@ describe('Agent version history', () => {
 				name: 'Release',
 			}),
 		).rejects.toThrow('Event write failed');
-		expect(await history.findByVersionAndAgentId(versionId, agentId)).toMatchObject({
+		expect(await history.findByVersionAndAgentId(versionId, agentId, {})).toMatchObject({
 			name: null,
 			publishedById: null,
 		});

@@ -32,15 +32,13 @@ import {
 	ICredentialsHelper,
 	MANAGED_VERSION_KEY,
 	NodeHelpers,
-	OPEN_AI_API_CREDENTIAL_TYPE,
 	Workflow,
-	UnexpectedError,
-	UserError,
 	classifyTriggerIdentity,
 	getCredentialOwnRequestAllowedDomains,
 	isExpression,
 	jsonParse,
 } from 'n8n-workflow';
+import { UnexpectedError, UserError } from '@n8n/errors';
 
 import { CredentialTypes } from '@/credential-types';
 import { CredentialsOverwrites } from '@/credentials-overwrites';
@@ -394,6 +392,11 @@ export class CredentialsHelper extends ICredentialsHelper {
 		return this.credentialTypes.getSupportedNodes(credentialType).includes(nodeType);
 	}
 
+	/** Whether the credential type offers Automatic OAuth mode (dynamic client registration). */
+	supportsDynamicClientRegistration(type: string): boolean {
+		return !!this.credentialTypes.getByName(type)?.dynamicClientRegistration;
+	}
+
 	/**
 	 * Returns all the properties of the credentials with the given name
 	 */
@@ -441,6 +444,7 @@ export class CredentialsHelper extends ICredentialsHelper {
 		decryptedData: ICredentialDataDecryptedObject,
 		mode: WorkflowExecuteMode,
 		additionalKeys: IWorkflowDataProxyAdditionalKeys,
+		selfData: ICredentialDataDecryptedObject,
 	): ICredentialDataDecryptedObject {
 		try {
 			return workflow.expression.getComplexParameterValue(
@@ -450,7 +454,7 @@ export class CredentialsHelper extends ICredentialsHelper {
 				additionalKeys,
 				undefined,
 				undefined,
-				decryptedData,
+				selfData,
 			) as ICredentialDataDecryptedObject;
 		} catch (error) {
 			// Non-execution contexts may not have runtime data for optional credential fields.
@@ -461,6 +465,7 @@ export class CredentialsHelper extends ICredentialsHelper {
 				decryptedData,
 				mode,
 				additionalKeys,
+				selfData,
 				error,
 			);
 		}
@@ -472,6 +477,7 @@ export class CredentialsHelper extends ICredentialsHelper {
 		decryptedData: ICredentialDataDecryptedObject,
 		mode: WorkflowExecuteMode,
 		additionalKeys: IWorkflowDataProxyAdditionalKeys,
+		selfData: ICredentialDataDecryptedObject,
 		originalError: unknown,
 	): ICredentialDataDecryptedObject {
 		const propertiesByName = new Map(
@@ -488,7 +494,7 @@ export class CredentialsHelper extends ICredentialsHelper {
 					additionalKeys,
 					undefined,
 					undefined,
-					decryptedData,
+					selfData,
 				) as ICredentialDataDecryptedObject;
 
 				if (Object.prototype.hasOwnProperty.call(resolvedProperty, propertyName)) {
@@ -598,10 +604,9 @@ export class CredentialsHelper extends ICredentialsHelper {
 
 		const credentialsEntity = await this.getCredentialsEntity(nodeCredentials, type);
 
-		// Managed OpenAI credentials are unavailable to nodes that can request undeclared types.
+		// Managed credentials are unavailable to nodes that can request undeclared types.
 		if (
 			credentialsEntity.isManaged &&
-			type === OPEN_AI_API_CREDENTIAL_TYPE &&
 			consumerNode &&
 			FULL_ACCESS_NODE_TYPES.has(consumerNode.type)
 		) {
@@ -756,11 +761,14 @@ export class CredentialsHelper extends ICredentialsHelper {
 		managedVersion?: number,
 	): Promise<ICredentialDataDecryptedObject> {
 		const credentialsProperties = this.getCredentialsProperties(type);
+		const dynamicClientRegistration = this.supportsDynamicClientRegistration(type);
 
 		// The credential type owns hidden OAuth endpoint/flow fields. Drop stored values so
 		// applyOverwrite (admin overwrite) and getNodeParameters (type default) fill them.
+		// Registration types let the user choose, so keep the stored choice.
 		const storedData = { ...decryptedDataOriginal };
 		for (const field of OAUTH_PINNED_FIELDS) {
+			if (dynamicClientRegistration && field === 'useDynamicClientRegistration') continue;
 			if (credentialsProperties.some((p) => p.name === field && p.type === 'hidden')) {
 				delete storedData[field];
 			}
@@ -819,6 +827,17 @@ export class CredentialsHelper extends ICredentialsHelper {
 			isCredential: true,
 		});
 
+		// Secret values supplied by an instance overwrite stay out of `$self`.
+		const selfData = { ...decryptedData };
+		for (const { name, typeOptions } of credentialsProperties) {
+			if (
+				(typeOptions?.password || typeOptions?.expirable) &&
+				dataWithOverwrites[name] !== storedData[name]
+			) {
+				delete selfData[name];
+			}
+		}
+
 		if (expressionResolveValues) {
 			try {
 				decryptedData = expressionResolveValues.workflow.expression.getParameterValue(
@@ -832,7 +851,7 @@ export class CredentialsHelper extends ICredentialsHelper {
 					additionalKeys,
 					executeData,
 					false,
-					decryptedData,
+					selfData,
 				) as ICredentialDataDecryptedObject;
 			} catch (e) {
 				e.message += ' [Error resolving credentials]';
@@ -855,6 +874,7 @@ export class CredentialsHelper extends ICredentialsHelper {
 					decryptedData,
 					mode,
 					additionalKeys,
+					selfData,
 				);
 			} finally {
 				await workflow.expression.releaseIsolate();

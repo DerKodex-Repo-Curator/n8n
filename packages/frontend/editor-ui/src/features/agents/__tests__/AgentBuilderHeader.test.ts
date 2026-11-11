@@ -39,11 +39,6 @@ vi.mock('vue-router', () => ({
 }));
 
 vi.mock('@n8n/design-system', () => ({
-	N8nAssistantIcon: {
-		name: 'N8nAssistantIcon',
-		template: '<i data-testid="stub-assistant-icon" />',
-		props: ['size'],
-	},
 	N8nText: { template: '<span><slot /></span>', props: ['step', 'color'] },
 	N8nIcon: { template: '<i v-bind="$attrs"></i>', props: ['icon', 'size'] },
 	N8nButton: {
@@ -152,7 +147,6 @@ function mountHeader(
 		headerActions: unknown[];
 		mode: 'edit' | 'preview';
 		artifactMode: boolean;
-		isPreviewOpen: boolean;
 		currentSessionTitle: string;
 		sessionOptions: Array<{ id: string; label: string }>;
 		configValidationStatus: 'valid' | 'invalid' | null;

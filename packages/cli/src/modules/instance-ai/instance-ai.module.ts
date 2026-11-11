@@ -52,6 +52,7 @@ export class InstanceAiModule implements ModuleInterface {
 		);
 		await Container.get(InstanceAiSetupTelemetryService).recordSetupCompletedIfNeeded();
 		await import('./instance-ai.controller.js');
+		await import('./assistant.controller.js');
 		await import('./mcp/instance-ai-mcp-connection.controller.js');
 		const { InstanceAiConfig } = await import('@n8n/config');
 		if (Container.get(InstanceAiConfig).evalInstance) {
@@ -119,6 +120,15 @@ export class InstanceAiModule implements ModuleInterface {
 		await Container.get(SystemAgentRegistrationService).register(
 			Container.get(AssistantAgentProvider),
 		);
+		const { InstanceAiCreditService } = await import('./instance-ai-credit.service.js');
+		const { AssistantThreadCreditsService } = await import(
+			'./assistant-agent/assistant-thread-credits.service.js'
+		);
+		Container.get(InstanceAiCreditService).useAgentThreadCredits(
+			Container.get(AssistantThreadCreditsService),
+		);
+		// Its routes depend on the agents module, so they load only with the agent.
+		await import('./assistant-agent/assistant-agent.controller.js');
 		this.assistantAgentRegistered = true;
 	}
 
@@ -184,9 +194,6 @@ export class InstanceAiModule implements ModuleInterface {
 		const { InstanceAiThread } = await import('./entities/instance-ai-thread.entity.js');
 		const { InstanceAiMessage } = await import('./entities/instance-ai-message.entity.js');
 		const { InstanceAiResource } = await import('./entities/instance-ai-resource.entity.js');
-		const { InstanceAiIterationLog } = await import(
-			'./entities/instance-ai-iteration-log.entity.js'
-		);
 		const { InstanceAiCheckpoint } = await import('./entities/instance-ai-checkpoint.entity.js');
 		const { InstanceAiPendingConfirmation } = await import(
 			'./entities/instance-ai-pending-confirmation.entity.js'
@@ -235,7 +242,6 @@ export class InstanceAiModule implements ModuleInterface {
 			InstanceAiThread,
 			InstanceAiMessage,
 			InstanceAiResource,
-			InstanceAiIterationLog,
 			InstanceAiCheckpoint,
 			InstanceAiPendingConfirmation,
 			InstanceAiObservation,
@@ -258,6 +264,19 @@ export class InstanceAiModule implements ModuleInterface {
 	@OnShutdown()
 	async shutdown() {
 		if (!this.isMain()) return;
+
+		if (this.assistantAgentRegistered) {
+			// Before the service shutdown, whose final flush exports these trace roots.
+			// A failure here must not stop the shutdown of the current Assistant runtime.
+			try {
+				const { AssistantTurnTracer } = await import('./assistant-agent/assistant-turn-trace.js');
+				await Container.get(AssistantTurnTracer).finishOpenTraces();
+			} catch (error) {
+				Container.get(Logger)
+					.scoped('instance-ai')
+					.warn('Failed to close the Assistant agent traces at shutdown', { error });
+			}
+		}
 
 		const { InstanceAiService } = await import('./instance-ai.service.js');
 		await Container.get(InstanceAiService).shutdown();

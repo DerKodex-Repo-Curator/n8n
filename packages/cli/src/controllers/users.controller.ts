@@ -9,7 +9,6 @@ import {
 import type { PublicUser } from '@n8n/db';
 import {
 	User,
-	UserRepository,
 	PersonRepository,
 	AuthenticatedRequest,
 	GLOBAL_ADMIN_ROLE,
@@ -36,10 +35,15 @@ import { UserRequest } from '@/requests';
 import { JwtService, RoleService, UrlService } from '@n8n/backend-services';
 import { UserService } from '@/services/user.service';
 
+/**
+ * The details a caller without `user:create` sees for its own user. The
+ * account status stays hidden, as for every other user.
+ */
+const ownUserDetailSchema = userDetailSchema.omit({ disabled: true });
+
 @RestController('/users')
 export class UsersController {
 	constructor(
-		private readonly userRepository: UserRepository,
 		private readonly personRepository: PersonRepository,
 		private readonly authService: AuthService,
 		private readonly userService: UserService,
@@ -73,8 +77,9 @@ export class UsersController {
 
 		const usersSeesAllDetails = hasGlobalScope(currentUser, 'user:create');
 		return publicUsers.map((user) => {
-			return usersSeesAllDetails || user.id === currentUser.id
-				? userDetailSchema.parse(user)
+			if (usersSeesAllDetails) return userDetailSchema.parse(user);
+			return user.id === currentUser.id
+				? ownUserDetailSchema.parse(user)
 				: userBaseSchema.parse(user);
 		});
 	}
@@ -88,12 +93,22 @@ export class UsersController {
 	) {
 		await this.userService.assertGetUsersAccess(req.user, listQueryOptions.filter?.projectId);
 
+		// The account status of a user is visible only to callers that can
+		// create users, so only they can filter or count by it.
+		const { filter, includeStatusCounts } = listQueryOptions;
+		const usesAccountStatus = filter?.status !== undefined || includeStatusCounts === true;
+		if (usesAccountStatus && !hasGlobalScope(req.user, 'user:create')) {
+			throw new ForbiddenError('You cannot filter or count users by status');
+		}
+
 		const scope = listQueryOptions.filter?.scope;
 		const roleSlugs = scope ? await this.roleService.rolesWithScope('global', scope) : undefined;
-		const userQuery = this.userRepository.buildUserQuery(listQueryOptions, roleSlugs);
-		const response = await userQuery.getManyAndCount();
-
-		const [users, count] = response;
+		const [{ users, count }, statusCounts] = await Promise.all([
+			this.personRepository.listUsers(listQueryOptions, roleSlugs),
+			includeStatusCounts
+				? this.personRepository.countUserListStatuses(filter, roleSlugs)
+				: undefined,
+		]);
 
 		const publicUsers = await Promise.all(
 			users.map(async (u) => {
@@ -116,6 +131,7 @@ export class UsersController {
 		return usersListSchema.parse({
 			count,
 			items: this.removeSupplementaryFields(publicUsers, listQueryOptions, req.user),
+			statusCounts,
 		});
 	}
 
@@ -175,14 +191,7 @@ export class UsersController {
 		@Body payload: SettingsUpdateRequestDto,
 		@Param('id') id: string,
 	) {
-		await this.userService.updateSettings(id, payload);
-
-		const user = await this.userRepository.findOneOrFail({
-			select: ['settings'],
-			where: { id },
-		});
-
-		return user.settings;
+		return await this.userService.updateSettings(id, payload);
 	}
 
 	/**

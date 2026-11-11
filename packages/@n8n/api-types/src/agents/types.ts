@@ -8,7 +8,13 @@ import type { ProviderAttachmentCapabilities } from './provider-capabilities';
 
 export type AgentActor = 'user' | 'builder' | 'mcp';
 
-export type AgentExecutionStatus = 'running' | 'success' | 'error' | 'cancelled' | 'interrupted';
+export type AgentExecutionStatus =
+	| 'running'
+	| 'success'
+	| 'error'
+	| 'cancelled'
+	| 'interrupted'
+	| 'awaiting';
 
 export interface AgentSessionPreviewAccess {
 	canContinueInPreview: boolean;
@@ -222,6 +228,21 @@ export interface AgentSkill {
 	references?: AgentSkillReference[];
 }
 
+/**
+ * The versions of one attached skill, as the agent builder shows them. Numbers are
+ * `skill_version.version`.
+ */
+export interface AgentSkillVersionInfo {
+	/** The version the draft runs: the pinned one, else the latest. */
+	draft: number;
+	/** The version the published agent runs. Null when the published agent does not use the skill. */
+	published: number | null;
+	/** The newest saved version of the skill. */
+	latest: number;
+	/** True when the draft ref is pinned to a version. */
+	pinned: boolean;
+}
+
 export interface AgentConfigResponse {
 	config: AgentJsonConfig;
 	configHash: string;
@@ -307,6 +328,46 @@ export interface AgentMemoryEntryDto {
 	source?: AgentMemoryEntrySourceDto;
 	/** Distinct source threads besides the one shown in `source`. */
 	otherSourceCount: number;
+}
+
+/** Current state of a memory entry that a run recalled. `replaced` means the agent dropped or superseded it. */
+export type AgentTraceRecalledMemoryStatus = 'active' | 'replaced' | 'deleted';
+
+/** Current state of a fact that a run flagged for capture. */
+export type AgentTraceFlaggedMemoryStatus =
+	| 'pending'
+	| 'stored'
+	| 'replaced'
+	| 'failed'
+	| 'deleted';
+
+/** The newest evidence for a recalled entry. */
+export interface AgentTraceMemoryOriginDto {
+	threadId: string;
+	/** The requesting user can open this session. */
+	canOpen: boolean;
+	evidence: string;
+	createdAt: string;
+}
+
+export interface AgentTraceRecalledMemoryDto {
+	entryId: string;
+	content: string;
+	status: AgentTraceRecalledMemoryStatus;
+	origin?: AgentTraceMemoryOriginDto;
+}
+
+export interface AgentTraceFlaggedMemoryDto {
+	captureId: string;
+	content: string;
+	evidence: string;
+	status: AgentTraceFlaggedMemoryStatus;
+}
+
+/** Memory activity of a session, keyed by the `toolCallId` of each recall_memory and flag_memory call. */
+export interface AgentThreadMemoryDto {
+	recalls: Record<string, AgentTraceRecalledMemoryDto[]>;
+	flags: Record<string, AgentTraceFlaggedMemoryDto>;
 }
 
 export interface AgentMemoryEntriesPageDto {
@@ -450,6 +511,36 @@ export interface PersistedChildTrace {
 	steps: PersistedChildTraceStep[];
 }
 
+/**
+ * A file that a workflow or node tool returned. The tool output lists these
+ * in its `files` field. The model sees only this metadata, not the bytes.
+ */
+export interface AgentToolOutputFile {
+	fileId: string;
+	fileName: string;
+	mimeType: string;
+	sizeBytes: number;
+}
+
+/** A file of an agent session, for the session files list. */
+export interface AgentSessionFile extends AgentToolOutputFile {
+	/** Where the file came from, e.g. 'chat', 'tool' or 'sandbox'. */
+	source: string;
+	/** ISO 8601 time when the file was stored. */
+	createdAt: string;
+}
+
+export interface AgentSessionFilesResponse {
+	/** Newest first. One entry for each content, plus each older file without a hash. */
+	files: AgentSessionFile[];
+}
+
+/** A tool output file that was not stored. The model gets the reason in the tool result. */
+export interface AgentToolSkippedFile {
+	fileName: string;
+	reason: string;
+}
+
 export interface AgentPersistedMessageContentPart {
 	type: 'text' | 'reasoning' | 'tool-call' | 'file' | (string & {});
 	text?: string;
@@ -488,6 +579,8 @@ export interface AgentMessageAuthor {
 }
 
 export interface AgentPersistedMessageDto {
+	/** A saved acknowledgement of Stop all tasks. */
+	stopReport?: boolean;
 	/** Background results that started this turn. */
 	backgroundTaskSignal?: AgentBackgroundJobSignal;
 	id: string;
@@ -648,15 +741,23 @@ export interface SystemAgentThreadSummary {
 	title: string | null;
 	updatedAt: string;
 	projectId: string;
+	/** The memory metadata of the thread, such as the agent that an Assistant thread builds. */
+	metadata?: Record<string, unknown>;
 }
 
-/** The user's own threads with one system agent, newest first. */
+/** One page of the user's own threads with one system agent, newest first. */
 export interface SystemAgentThreadsResponse {
 	data: SystemAgentThreadSummary[];
+	/** Pass as `cursor` to read the next page. `null` on the last page. */
+	nextCursor: string | null;
 }
 
 export interface AgentSessionLangSmithExportResponse {
 	traceId: string;
+}
+
+export interface AgentSessionStopResponse {
+	cancelRequested: boolean;
 }
 
 /**
@@ -673,6 +774,11 @@ export const N8N_CHAT_INTEGRATION_TYPE = 'n8n_chat' as const;
  * except `control` turns them on.
  */
 export const AGENTS_N8N_CHAT_FLAG = '125_agents_n8n_chat';
+/**
+ * Instance-level PostHog flag for the sandbox files of agents and the session
+ * files panel in the agent chat.
+ */
+export const AGENT_SANDBOX_FILES_FLAG = '137_agent_sandbox_files';
 /** Fixed tool names for the implicit in-app chat integration (no credential suffixes). */
 export const N8N_CHAT_ACTION_TOOL_NAME = 'chat_action' as const;
 export const N8N_CHAT_CONTEXT_TOOL_NAME = 'chat_context' as const;

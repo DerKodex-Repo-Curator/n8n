@@ -38,7 +38,8 @@ export interface RuntimeSkillLinkedFiles {
 export interface RuntimeSkillIndexEntry {
 	name: string;
 	description: string;
-	recommendedTools?: string[];
+	/** Tool groups in the tool catalog whose tools this skill uses, such as `workflows` or `credentials`. */
+	recommendedToolGroups?: string[];
 }
 
 export interface RuntimeSkillInterfaceContract {
@@ -49,9 +50,19 @@ export interface RuntimeSkillInterfaceContract {
 	brandColor?: string;
 }
 
+export const RUNTIME_SKILL_LIFETIMES = ['thread', 'turn'] as const;
+
+/**
+ * How long a loaded skill stays active. `thread` (the default) keeps it for the
+ * rest of the conversation. `turn` keeps it until the next user turn starts, for
+ * skills that guide one decision and are dead weight in context afterwards.
+ */
+export type RuntimeSkillLifetime = (typeof RUNTIME_SKILL_LIFETIMES)[number];
+
 export interface RuntimeSkillPolicyContract {
 	allowImplicitInvocation?: boolean;
 	product?: string;
+	lifetime?: RuntimeSkillLifetime;
 }
 
 export interface RuntimeSkillMcpServerDependency {
@@ -180,6 +191,8 @@ export interface RuntimeSkillFileContent {
 export type RuntimeSkillFileLoader = (
 	skillId: string,
 	filePath: string,
+	/** Keep failure details local to this read when calls run concurrently. */
+	onError?: (error: RuntimeSkillLoadError) => void,
 ) => Promise<RuntimeSkillFileContent | null>;
 
 export interface RuntimeSkillLoadError {
@@ -190,18 +203,32 @@ export interface RuntimeSkillLoadError {
 
 export interface RuntimeSkillSource {
 	registry: RuntimeSkillRegistry;
+	/** Keep these entries out of cached instructions. Send snapshots in user messages instead. */
+	dynamicCatalog?: {
+		skillIds: string[];
+		/** Current availability and loading guidance for these skills. */
+		notice?: string;
+	};
+	/** Observe applied revocations and skill context prepared for model calls. */
+	onContext?: (skills: RuntimeSkillContextUsage[]) => void;
 	/** Identify skills that need explicit updates, including IDs no longer in the catalog. */
 	shouldAppendSkillUpdates?: (skillId: string) => boolean;
 	/**
 	 * Lazy setup that runs before a skill is loaded, not when the agent is built.
 	 * It must not change catalog fields (id, name, description, category,
-	 * recommendedTools), because the catalog is rendered before it runs.
+	 * recommendedToolGroups), because the catalog is rendered before it runs.
 	 * Only load_skill calls it, so loadSkill and loadFile must not depend on it.
 	 */
 	prepare?: () => Promise<void>;
 	loadSkill: RuntimeSkillLoader;
 	loadFile?: RuntimeSkillFileLoader;
 	getLoadError?: (skillId: string) => RuntimeSkillLoadError | undefined;
+}
+
+export interface RuntimeSkillContextUsage {
+	skillId: string;
+	version?: string;
+	kind: 'carried' | 'refreshed' | 'revoked' | 'unavailable';
 }
 
 export interface RuntimeSkillStateScope {
