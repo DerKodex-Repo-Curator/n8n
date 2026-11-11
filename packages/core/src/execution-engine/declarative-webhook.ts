@@ -7,14 +7,25 @@ import type {
 	IDataObject,
 	IDeclarativeWebhookTrigger,
 	IHookFunctions,
+	IN8nHttpFullResponse,
+	INodeExecutionData,
 	INodeType,
 	IWebhookFunctions,
+	IWebhookResponseData,
 	IWorkflowDataProxyAdditionalKeys,
+	PostReceiveAction,
 } from 'n8n-workflow';
-import { NodeApiError, NodeOperationError, UnexpectedError } from 'n8n-workflow';
+import {
+	createRunExecutionData,
+	NodeApiError,
+	NodeOperationError,
+	UnexpectedError,
+} from 'n8n-workflow';
 import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 
-import { HookContext } from './node-execution-context';
+import { ExecuteSingleContext, HookContext, WebhookContext } from './node-execution-context';
+import type { NodeExecutionContext } from './node-execution-context/node-execution-context';
+import { runPostReceiveAction } from './post-receive';
 import { runStandaloneRouting } from './standalone-routing';
 
 type WebhookMethods = NonNullable<NonNullable<INodeType['webhookMethods']>['default']>;
@@ -30,9 +41,9 @@ function clearManagedKeys(trigger: IDeclarativeWebhookTrigger, staticData: IData
 	for (const key of keys) delete staticData[key];
 }
 
-// One pass only: response values that start with "=" stay literal strings.
+// One pass only: response and request values that start with "=" stay literal strings.
 const resolve = (
-	context: HookContext,
+	context: Pick<NodeExecutionContext, 'workflow' | 'node' | 'mode'>,
 	value: string,
 	extraKeys: IWorkflowDataProxyAdditionalKeys,
 ) =>
@@ -238,7 +249,104 @@ export function createDeclarativeWebhookMethods(
 	};
 }
 
-/** The default `webhook()` of a declarative webhook trigger. It emits the request body. */
-export async function declarativeWebhook(this: IWebhookFunctions) {
-	return { workflowData: [this.helpers.returnJsonArray(this.getBodyData())] };
+/** Shapes the items with `postReceive` actions. The request stands in for the response. */
+async function shapeItems(
+	context: WebhookContext,
+	actions: PostReceiveAction[],
+	items: INodeExecutionData[],
+	request: NonNullable<IWorkflowDataProxyAdditionalKeys['$webhookRequest']>,
+) {
+	const { workflow, node, additionalData, mode } = context;
+	const response: IN8nHttpFullResponse = {
+		body: request.body,
+		headers: request.headers,
+		statusCode: 200,
+	};
+	const extraKeys = { $webhookRequest: request };
+	const executeSingleContext = new ExecuteSingleContext(
+		workflow,
+		node,
+		additionalData,
+		mode,
+		createRunExecutionData(),
+		0,
+		[],
+		{ main: [[{ json: {} }]] },
+		0,
+		{ node, data: {}, source: null },
+	);
+	for (const action of actions) {
+		items = await runPostReceiveAction(
+			executeSingleContext,
+			action,
+			items,
+			response,
+			undefined,
+			0,
+			0,
+			{
+				node,
+				// One pass, as in `resolve`. The keys of the action win over the extra keys.
+				resolveValue: (value, itemIndex, runIndex, actionExecuteData, additionalKeys) =>
+					workflow.expression.getParameterValue(
+						value,
+						null,
+						runIndex,
+						itemIndex,
+						node.name,
+						[],
+						mode,
+						{ ...extraKeys, ...additionalKeys },
+						actionExecuteData,
+					),
+				getCredentials: async () => undefined,
+			},
+		);
+	}
+	return items;
+}
+
+/** Builds the default `webhook()` of a declarative webhook trigger. Stage order: ping, filter, output. */
+export function createDeclarativeWebhook(trigger: IDeclarativeWebhookTrigger) {
+	const { ping, filter, output } = trigger.handler ?? {};
+	return async function (this: IWebhookFunctions): Promise<IWebhookResponseData> {
+		if (!(this instanceof WebhookContext)) {
+			throw new UnexpectedError('Declarative webhook trigger needs a WebhookContext');
+		}
+		const body = this.getBodyData();
+		const headers = this.getHeaderData();
+		const query = this.getQueryData();
+		const request = { body, headers, query };
+		const extraKeys: IWorkflowDataProxyAdditionalKeys = { $webhookRequest: request };
+
+		if (ping && resolve(this, ping.when, extraKeys)) {
+			return {
+				webhookResponse:
+					ping.response === undefined ? 'OK' : resolve(this, ping.response, extraKeys),
+			};
+		}
+
+		if (filter) {
+			const allowedValue = resolve(this, filter.allowed, extraKeys);
+			const allowed: unknown[] = Array.isArray(allowedValue) ? allowedValue : [allowedValue];
+			const wildcard = filter.wildcard !== undefined && allowed.includes(filter.wildcard);
+			const actual = resolve(this, filter.actual, extraKeys);
+			// No `workflowData`: the server replies 200 and starts no workflow.
+			if (!wildcard && (actual === undefined || !allowed.includes(actual))) return {};
+		}
+
+		// Not `returnJsonArray`: a body key such as `json` or `binary` must not shape the item.
+		const elements: IDataObject[] = Array.isArray(body) ? body : [body];
+		let items: INodeExecutionData[] = elements.map((json) => ({ json }));
+		if (output?.postReceive?.length) {
+			items = await shapeItems(this, output.postReceive, items, request);
+		}
+		if (output?.includeMeta) {
+			// The spread keeps binary data that a postReceive action attached.
+			items = items.map((item) => ({ ...item, json: { body: item.json, headers, query } }));
+		}
+		// An empty result starts no workflow, the same as a filter miss.
+		if (items.length === 0) return {};
+		return { workflowData: [items] };
+	};
 }

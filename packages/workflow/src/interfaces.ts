@@ -3086,6 +3086,22 @@ export interface IDeclarativeWebhookTrigger {
 	};
 	/** Static-data keys to clear when the webhook is gone. Default: the keys of `create.store`. */
 	managedKeys?: string[];
+	/** Handles each request. Without it, the trigger emits the request body. */
+	handler?: DeclarativeWebhookHandler;
+}
+
+/** The request stages of a declarative webhook trigger, in run order. Expressions can use `$webhookRequest`. */
+export interface DeclarativeWebhookHandler {
+	/** If `when` is truthy, reply with `response` (default `OK`) and start no workflow. */
+	ping?: { when: string; response?: string };
+	/** Start the workflow only if `actual` is in `allowed` (a string is one item). A `wildcard` in `allowed` accepts all. */
+	filter?: { allowed: string; actual: string; wildcard?: string };
+	output?: {
+		/** Routing `postReceive` actions. `$response.body` is the request body. */
+		postReceive?: PostReceiveAction[];
+		/** Emit each item as `{ body, headers, query }`. */
+		includeMeta?: boolean;
+	};
 }
 
 export type PostReceiveAction =
@@ -3534,6 +3550,8 @@ export type IWorkflowDataProxyAdditionalKeys = IDataObject & {
 	$generated?: Record<string, string>;
 	/** A registered webhook that `checkExists` of a declarative webhook trigger compares. */
 	$hook?: IDataObject;
+	/** The incoming request of a declarative webhook trigger. Header names are lowercase. */
+	$webhookRequest?: { body: IDataObject; headers: IncomingHttpHeaders; query: object };
 	/** @deprecated */
 	$executionId?: string;
 	/** @deprecated */
