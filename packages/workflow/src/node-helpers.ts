@@ -1912,6 +1912,11 @@ export function isTriggerNode(nodeTypeData: INodeTypeDescription) {
 	return nodeTypeData.group.includes('trigger');
 }
 
+/** `requestDefaults` marks a node that `RoutingNode` runs, except a webhook trigger. */
+export function isDeclarativeActionNode(description?: INodeTypeDescription) {
+	return description?.requestDefaults !== undefined && description.trigger?.type !== 'webhook';
+}
+
 export function isExecutable(
 	workflow: WorkflowForNodeHelpers,
 	node: INode,
